@@ -45,7 +45,13 @@ FixedMul
 ( fixed_t	a,
   fixed_t	b )
 {
+#ifdef __chibicc__
+    /* chibicc i386 backend lacks 64-bit integer support.
+       Use double intermediate — sufficient for 16.16 fixed-point. */
+    return (fixed_t)(((double)a * (double)b) / 65536.0);
+#else
     return ((long long) a * (long long) b) >> FRACBITS;
+#endif
 }
 
 

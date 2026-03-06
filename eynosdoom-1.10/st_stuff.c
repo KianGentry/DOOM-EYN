@@ -313,6 +313,7 @@ static boolean		st_fragson;
 
 // main bar left
 static patch_t*		sbar;
+static patch_t*		sbar_r; /* right half; non-NULL when WAD has STBARL/STBARR instead of STBAR */
 
 // 0-9, tall numbers
 static patch_t*		tallnum[10];
@@ -473,6 +474,12 @@ cheatseq_t	cheat_commercial_noclip = { cheat_commercial_noclip_seq, 0 };
 
 cheatseq_t	cheat_powerup[7] =
 {
+#ifdef __chibicc__
+    /* chibicc cannot evaluate 2-D array subscripts as compile-time
+       constant addresses.  Zero-init here; ST_InitCheats fills them. */
+    { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 },
+    { 0, 0 }, { 0, 0 }, { 0, 0 }
+#else
     { cheat_powerup_seq[0], 0 },
     { cheat_powerup_seq[1], 0 },
     { cheat_powerup_seq[2], 0 },
@@ -480,6 +487,7 @@ cheatseq_t	cheat_powerup[7] =
     { cheat_powerup_seq[4], 0 },
     { cheat_powerup_seq[5], 0 },
     { cheat_powerup_seq[6], 0 }
+#endif
 };
 
 cheatseq_t	cheat_choppers = { cheat_choppers_seq, 0 };
@@ -501,7 +509,12 @@ void ST_refreshBackground(void)
 
     if (st_statusbaron)
     {
-	V_DrawPatch(ST_X, 0, BG, sbar);
+	if (sbar)
+	{
+	    V_DrawPatch(ST_X, 0, BG, sbar);
+	    if (sbar_r)
+		V_DrawPatch(ST_X + sbar->width, 0, BG, sbar_r);
+	}
 
 	if (netgame)
 	    V_DrawPatch(ST_FX, 0, BG, faceback);
@@ -1171,7 +1184,34 @@ void ST_loadGraphics(void)
     faceback = (patch_t *) W_CacheLumpName(namebuf, PU_STATIC);
 
     // status bar background bits
-    sbar = (patch_t *) W_CacheLumpName("STBAR", PU_STATIC);
+    /* WADs use different naming for the status bar background graphic:
+     *   - Standard retail/shareware WADs:  STBAR  (single 320-wide patch)
+     *   - Some shareware variants:         STBARL + STBARR (left / right halves)
+     *   - Some custom / modified WADs:     STMBARL + STMBARR or STABARL + STABARR
+     * Try each naming scheme in order; if none is found, skip the background
+     * (the game remains playable without it). */
+    sbar   = NULL;
+    sbar_r = NULL;
+    if (W_CheckNumForName("STBAR") >= 0)
+    {
+        sbar = (patch_t *) W_CacheLumpName("STBAR", PU_STATIC);
+    }
+    else if (W_CheckNumForName("STBARL") >= 0)
+    {
+        sbar   = (patch_t *) W_CacheLumpName("STBARL", PU_STATIC);
+        sbar_r = (patch_t *) W_CacheLumpName("STBARR", PU_STATIC);
+    }
+    else if (W_CheckNumForName("STMBARL") >= 0)
+    {
+        sbar   = (patch_t *) W_CacheLumpName("STMBARL", PU_STATIC);
+        sbar_r = (patch_t *) W_CacheLumpName("STMBARR", PU_STATIC);
+    }
+    else if (W_CheckNumForName("STABARL") >= 0)
+    {
+        sbar   = (patch_t *) W_CacheLumpName("STABARL", PU_STATIC);
+        sbar_r = (patch_t *) W_CacheLumpName("STABARR", PU_STATIC);
+    }
+    /* else: no status bar background lump; sbar stays NULL; drawing is guarded below */
 
     // face states
     facenum = 0;
@@ -1229,7 +1269,8 @@ void ST_unloadGraphics(void)
     for (i=0;i<NUMCARDS;i++)
 	Z_ChangeTag(keys[i], PU_CACHE);
 
-    Z_ChangeTag(sbar, PU_CACHE);
+    if (sbar)   Z_ChangeTag(sbar, PU_CACHE);
+    if (sbar_r) Z_ChangeTag(sbar_r, PU_CACHE);
     Z_ChangeTag(faceback, PU_CACHE);
 
     for (i=0;i<ST_NUMFACES;i++)
@@ -1465,6 +1506,13 @@ void ST_Stop (void)
 
 void ST_Init (void)
 {
+#ifdef __chibicc__
+    /* Runtime init for cheat_powerup[] — see static init guard above. */
+    for (int i = 0; i < 7; i++) {
+        cheat_powerup[i].sequence = cheat_powerup_seq[i];
+        cheat_powerup[i].p = 0;
+    }
+#endif
     veryfirsttime = 0;
     ST_loadData();
     screens[4] = (byte *) Z_Malloc(ST_WIDTH*ST_HEIGHT, PU_STATIC, 0);

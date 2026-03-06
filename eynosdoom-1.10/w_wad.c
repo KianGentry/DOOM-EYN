@@ -454,7 +454,19 @@ W_ReadLump
 	handle = l->handle;
 		
     lseek (handle, l->position, SEEK_SET);
-    c = read (handle, dest, l->size);
+    /* EYN-OS read() may return short for large lumps; loop until full. */
+    {
+	int remaining = l->size;
+	byte* dst = (byte*)dest;
+	c = 0;
+	while (remaining > 0) {
+	    int got = read(handle, dst, remaining);
+	    if (got <= 0) break;
+	    c += got;
+	    dst += got;
+	    remaining -= got;
+	}
+    }
 
     if (c < l->size)
 	I_Error ("W_ReadLump: only read %i of %i on lump %i",

@@ -573,7 +573,7 @@ void IdentifyVersion (void)
     char*	tntwad;
 
 #ifdef NORMALUNIX
-    char *home;
+	char*	home;
     char *doomwaddir;
     doomwaddir = getenv("DOOMWADDIR");
     if (!doomwaddir)
@@ -608,9 +608,7 @@ void IdentifyVersion (void)
     doom2fwad = malloc(strlen(doomwaddir)+1+10+1);
     sprintf(doom2fwad, "%s/doom2f.wad", doomwaddir);
 
-    home = getenv("HOME");
-    if (!home)
-      I_Error("Please set $HOME to your home directory");
+    home = "/";
     sprintf(basedefault, "%s/.doomrc", home);
 #endif
 

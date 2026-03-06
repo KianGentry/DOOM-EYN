@@ -37,7 +37,14 @@ rcsid[] = "$Id: info.c,v 1.3 1997/01/26 07:45:00 b1 Exp $";
 
 #include "p_mobj.h"
 
-char *sprnames[NUMSPRITES] = {
+/* DOOM-INVARIANT: sprnames must be NULL-terminated.
+ * R_InitSpriteDefs walks this array with 'while (*check != NULL)' to count
+ * sprites.  The array is sized NUMSPRITES+1 so the extra slot is
+ * zero-initialised by C, providing the required sentinel.  Removing the +1
+ * causes the scan to read past the array into adjacent .data, producing a
+ * corrupt numsprites count and an eventual null-deref crash in R_InitSpriteDefs.
+ */
+char *sprnames[NUMSPRITES + 1] = {
     "TROO","SHTG","PUNG","PISG","PISF","SHTF","SHT2","CHGG","CHGF","MISG",
     "MISF","SAWG","PLSG","PLSF","BFGG","BFGF","BLUD","PUFF","BAL1","BAL2",
     "PLSS","PLSE","MISL","BFS1","BFE1","BFE2","TFOG","IFOG","PLAY","POSS",

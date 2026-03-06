@@ -1156,7 +1156,7 @@ typedef struct
 } state_t;
 
 extern state_t	states[NUMSTATES];
-extern char *sprnames[NUMSPRITES];
+extern char *sprnames[NUMSPRITES + 1]; /* +1 provides NULL sentinel for R_InitSpriteDefs */
 
 
 
