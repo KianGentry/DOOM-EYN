@@ -230,16 +230,21 @@ void R_DrawColumn (void)
 
 void R_DrawColumnLow (void) 
 { 
-    int			count; 
-    byte*		dest; 
+    int			count;
+    int			x;
+    byte*		dest;
     byte*		dest2;
+	byte*		source;
+	lighttable_t*	colormap;
     fixed_t		frac;
-    fixed_t		fracstep;	 
+    fixed_t		fracstep;
+	int			step;
+	int			step4;
  
-    count = dc_yh - dc_yl; 
+    count = dc_yh - dc_yl + 1;
 
     // Zero length.
-    if (count < 0) 
+	if (count <= 0)
 	return; 
 				 
 #ifdef RANGECHECK 
@@ -253,23 +258,56 @@ void R_DrawColumnLow (void)
     //	dccount++; 
 #endif 
     // Blocky mode, need to multiply by 2.
-    dc_x <<= 1;
+    x = dc_x << 1;
     
-    dest = ylookup[dc_yl] + columnofs[dc_x];
-    dest2 = ylookup[dc_yl] + columnofs[dc_x+1];
+    dest = ylookup[dc_yl] + columnofs[x];
+    dest2 = ylookup[dc_yl] + columnofs[x+1];
     
-    fracstep = dc_iscale; 
+    fracstep = dc_iscale;
     frac = dc_texturemid + (dc_yl-centery)*fracstep;
+    source = dc_source;
+    colormap = dc_colormap;
+    step = SCREENWIDTH;
+    step4 = SCREENWIDTH*4;
+
+    while (count >= 4)
+    {
+        byte pix;
+
+        pix = colormap[source[(frac>>FRACBITS)&127]];
+        dest[0] = pix;
+        dest2[0] = pix;
+        frac += fracstep;
+
+        pix = colormap[source[(frac>>FRACBITS)&127]];
+        dest[step] = pix;
+        dest2[step] = pix;
+        frac += fracstep;
+
+        pix = colormap[source[(frac>>FRACBITS)&127]];
+        dest[step+step] = pix;
+        dest2[step+step] = pix;
+        frac += fracstep;
+
+        pix = colormap[source[(frac>>FRACBITS)&127]];
+        dest[step+step+step] = pix;
+        dest2[step+step+step] = pix;
+        frac += fracstep;
+
+        dest += step4;
+        dest2 += step4;
+        count -= 4;
+    }
     
-    do 
+    while (count--) 
     {
 	// Hack. Does not work corretly.
-	*dest2 = *dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+    *dest2 = *dest = colormap[source[(frac>>FRACBITS)&127]];
 	dest += SCREENWIDTH;
 	dest2 += SCREENWIDTH;
 	frac += fracstep; 
 
-    } while (count--);
+    }
 }
 
 
@@ -404,13 +442,18 @@ byte*	translationtables;
 
 void R_DrawTranslatedColumn (void) 
 { 
-    int			count; 
-    byte*		dest; 
+    int			count;
+    byte*		dest;
+    byte*		source;
+    byte*		translation;
+    lighttable_t*	colormap;
     fixed_t		frac;
-    fixed_t		fracstep;	 
+    fixed_t		fracstep;
+	int			step;
+	int			step4;
  
-    count = dc_yh - dc_yl; 
-    if (count < 0) 
+	count = dc_yh - dc_yl + 1;
+	if (count <= 0)
 	return; 
 				 
 #ifdef RANGECHECK 
@@ -448,22 +491,42 @@ void R_DrawTranslatedColumn (void)
     dest = ylookup[dc_yl] + columnofs[dc_x]; 
 
     // Looks familiar.
-    fracstep = dc_iscale; 
-    frac = dc_texturemid + (dc_yl-centery)*fracstep; 
+    fracstep = dc_iscale;
+    frac = dc_texturemid + (dc_yl-centery)*fracstep;
+    source = dc_source;
+    translation = dc_translation;
+    colormap = dc_colormap;
+    step = SCREENWIDTH;
+    step4 = SCREENWIDTH*4;
+
+    while (count >= 4)
+    {
+        dest[0] = colormap[translation[source[frac>>FRACBITS]]];
+        frac += fracstep;
+        dest[step] = colormap[translation[source[frac>>FRACBITS]]];
+        frac += fracstep;
+        dest[step+step] = colormap[translation[source[frac>>FRACBITS]]];
+        frac += fracstep;
+        dest[step+step+step] = colormap[translation[source[frac>>FRACBITS]]];
+        frac += fracstep;
+
+        dest += step4;
+        count -= 4;
+    }
 
     // Here we do an additional index re-mapping.
-    do 
+    while (count--) 
     {
 	// Translation tables are used
 	//  to map certain colorramps to other ones,
 	//  used with PLAY sprites.
 	// Thus the "green" ramp of the player 0 sprite
 	//  is mapped to gray, red, black/indigo. 
-	*dest = dc_colormap[dc_translation[dc_source[frac>>FRACBITS]]];
+    *dest = colormap[translation[source[frac>>FRACBITS]]];
 	dest += SCREENWIDTH;
 	
 	frac += fracstep; 
-    } while (count--); 
+    }
 } 
 
 
@@ -696,8 +759,12 @@ void R_DrawSpan (void)
 void R_DrawSpanLow (void) 
 { 
     fixed_t		xfrac;
-    fixed_t		yfrac; 
-    byte*		dest; 
+    fixed_t		yfrac;
+	fixed_t		xstep;
+	fixed_t		ystep;
+	byte*		dest;
+	byte*		source;
+	lighttable_t*	colormap;
     int			count;
     int			spot; 
 	 
@@ -714,7 +781,11 @@ void R_DrawSpanLow (void)
 #endif 
 	 
     xfrac = ds_xfrac; 
-    yfrac = ds_yfrac; 
+        yfrac = ds_yfrac;
+        xstep = ds_xstep;
+        ystep = ds_ystep;
+        source = ds_source;
+        colormap = ds_colormap;
 
     // Blocky mode, need to multiply by 2.
     ds_x1 <<= 1;
@@ -729,11 +800,11 @@ void R_DrawSpanLow (void)
 	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
 	// Lowres/blocky mode does it twice,
 	//  while scale is adjusted appropriately.
-	*dest++ = ds_colormap[ds_source[spot]]; 
-	*dest++ = ds_colormap[ds_source[spot]];
+    *dest++ = colormap[source[spot]];
+    *dest++ = colormap[source[spot]];
 	
-	xfrac += ds_xstep; 
-	yfrac += ds_ystep; 
+    xfrac += xstep;
+    yfrac += ystep;
 
     } while (count--); 
 }

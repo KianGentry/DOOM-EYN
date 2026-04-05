@@ -1196,6 +1196,12 @@ void D_DoomMain (void)
 	}
 	autostart = true;
     }
+
+    if (M_CheckParm("-noprecache"))
+    {
+	precache = false;
+	printf ("Note: level precache disabled by -noprecache.\n");
+    }
     
     // init subsystems
     printf ("V_Init: allocate screens.\n");
