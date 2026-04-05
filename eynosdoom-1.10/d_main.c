@@ -38,6 +38,7 @@ static const char rcsid[] = "$Id: d_main.c,v 1.8 1997/02/03 22:45:09 b1 Exp $";
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/time.h>
 #endif
 
 
@@ -117,6 +118,124 @@ boolean		autostart;
 FILE*		debugfile;
 
 boolean		advancedemo;
+
+static boolean           doomperf_enabled = false;
+static int               doomperf_report_frames = 175;
+static int               doomperf_startup_reported;
+static unsigned long long doomperf_startup_begin_us;
+static int               doomperf_frame_count;
+static unsigned long     doomperf_logic_sum_us;
+static unsigned long     doomperf_sound_sum_us;
+static unsigned long     doomperf_display_sum_us;
+static unsigned long     doomperf_mix_sum_us;
+static unsigned long     doomperf_frame_sum_us;
+static unsigned long     doomperf_logic_max_us;
+static unsigned long     doomperf_sound_max_us;
+static unsigned long     doomperf_display_max_us;
+static unsigned long     doomperf_mix_max_us;
+static unsigned long     doomperf_frame_max_us;
+
+static unsigned long long D_PerfNowUS (void)
+{
+	struct timeval tv;
+
+	gettimeofday (&tv, NULL);
+	return (unsigned long long)tv.tv_sec * 1000000ULL + (unsigned long long)tv.tv_usec;
+}
+
+static void D_PerfStartupStage (char* stage, unsigned long long start_us)
+{
+	unsigned long dt_us;
+
+	if (!doomperf_enabled)
+		return;
+
+	dt_us = (unsigned long)(D_PerfNowUS() - start_us);
+	printf ("PERF startup %-20s %lu.%03lu ms\n", stage, dt_us/1000, dt_us%1000);
+}
+
+static void D_PerfStartupDone (char* mode)
+{
+	unsigned long total_us;
+
+	if (!doomperf_enabled || doomperf_startup_reported)
+		return;
+
+	total_us = (unsigned long)(D_PerfNowUS() - doomperf_startup_begin_us);
+	printf ("PERF startup total (%s): %lu.%03lu ms\n",
+			mode, total_us/1000, total_us%1000);
+	doomperf_startup_reported = 1;
+}
+
+static void D_PerfResetFrameStats (void)
+{
+	doomperf_frame_count = 0;
+	doomperf_logic_sum_us = 0;
+	doomperf_sound_sum_us = 0;
+	doomperf_display_sum_us = 0;
+	doomperf_mix_sum_us = 0;
+	doomperf_frame_sum_us = 0;
+	doomperf_logic_max_us = 0;
+	doomperf_sound_max_us = 0;
+	doomperf_display_max_us = 0;
+	doomperf_mix_max_us = 0;
+	doomperf_frame_max_us = 0;
+}
+
+static void D_PerfFrameSample
+( unsigned long logic_us,
+  unsigned long sound_us,
+  unsigned long display_us,
+  unsigned long mix_us,
+  unsigned long frame_us )
+{
+	unsigned long avg_logic;
+	unsigned long avg_sound;
+	unsigned long avg_display;
+	unsigned long avg_mix;
+	unsigned long avg_frame;
+
+	if (!doomperf_enabled)
+		return;
+
+	doomperf_frame_count++;
+	doomperf_logic_sum_us += logic_us;
+	doomperf_sound_sum_us += sound_us;
+	doomperf_display_sum_us += display_us;
+	doomperf_mix_sum_us += mix_us;
+	doomperf_frame_sum_us += frame_us;
+
+	if (logic_us > doomperf_logic_max_us)
+		doomperf_logic_max_us = logic_us;
+	if (sound_us > doomperf_sound_max_us)
+		doomperf_sound_max_us = sound_us;
+	if (display_us > doomperf_display_max_us)
+		doomperf_display_max_us = display_us;
+	if (mix_us > doomperf_mix_max_us)
+		doomperf_mix_max_us = mix_us;
+	if (frame_us > doomperf_frame_max_us)
+		doomperf_frame_max_us = frame_us;
+
+	if (doomperf_frame_count < doomperf_report_frames)
+		return;
+
+	avg_logic = doomperf_logic_sum_us / doomperf_frame_count;
+	avg_sound = doomperf_sound_sum_us / doomperf_frame_count;
+	avg_display = doomperf_display_sum_us / doomperf_frame_count;
+	avg_mix = doomperf_mix_sum_us / doomperf_frame_count;
+	avg_frame = doomperf_frame_sum_us / doomperf_frame_count;
+
+	printf ("PERF frames=%d avg frame=%lu.%03lu ms (logic=%lu.%03lu sound=%lu.%03lu display=%lu.%03lu mix=%lu.%03lu) max frame=%lu.%03lu ms\n",
+			doomperf_frame_count,
+			avg_frame/1000, avg_frame%1000,
+			avg_logic/1000, avg_logic%1000,
+			avg_sound/1000, avg_sound%1000,
+			avg_display/1000, avg_display%1000,
+			avg_mix/1000, avg_mix%1000,
+			doomperf_frame_max_us/1000, doomperf_frame_max_us%1000);
+
+	D_PerfResetFrameStats ();
+}
 
 
 
@@ -353,8 +472,20 @@ extern  boolean         demorecording;
 
 void D_DoomLoop (void)
 {
-    if (demorecording)
+	unsigned long long frame_start_us;
+	unsigned long long phase_start_us;
+	unsigned long logic_us;
+	unsigned long sound_us;
+	unsigned long display_us;
+	unsigned long mix_us;
+	unsigned long frame_us;
+
+	if (demorecording)
+	{
 	G_BeginRecording ();
+	}
+
+	D_PerfStartupDone ("doomloop");
 		
     if (M_CheckParm ("-debugfile"))
     {
@@ -365,13 +496,28 @@ void D_DoomLoop (void)
     }
 	
     I_InitGraphics ();
+    D_PerfResetFrameStats ();
 
     while (1)
     {
+	if (doomperf_enabled)
+	    frame_start_us = D_PerfNowUS();
+	else
+	    frame_start_us = 0;
+
+	logic_us = 0;
+	sound_us = 0;
+	display_us = 0;
+	mix_us = 0;
+	frame_us = 0;
+
 	// frame syncronous IO operations
 	I_StartFrame ();                
 	
 	// process one or more tics
+	if (doomperf_enabled)
+	    phase_start_us = D_PerfNowUS();
+
 	if (singletics)
 	{
 	    I_StartTic ();
@@ -388,11 +534,29 @@ void D_DoomLoop (void)
 	{
 	    TryRunTics (); // will run at least one tic
 	}
+
+	if (doomperf_enabled)
+	    logic_us = (unsigned long)(D_PerfNowUS() - phase_start_us);
+
+	if (doomperf_enabled)
+	    phase_start_us = D_PerfNowUS();
 		
 	S_UpdateSounds (players[consoleplayer].mo);// move positional sounds
 
+	if (doomperf_enabled)
+	    sound_us = (unsigned long)(D_PerfNowUS() - phase_start_us);
+
+	if (doomperf_enabled)
+	    phase_start_us = D_PerfNowUS();
+
 	// Update display, next frame, with current state.
 	D_Display ();
+
+	if (doomperf_enabled)
+	    display_us = (unsigned long)(D_PerfNowUS() - phase_start_us);
+
+	if (doomperf_enabled)
+	    phase_start_us = D_PerfNowUS();
 
 #ifndef SNDSERV
 	// Sound mixing for the buffer is snychronous.
@@ -403,6 +567,13 @@ void D_DoomLoop (void)
 	// Update sound output.
 	I_SubmitSound();
 #endif
+
+	if (doomperf_enabled)
+	{
+	    mix_us = (unsigned long)(D_PerfNowUS() - phase_start_us);
+	    frame_us = (unsigned long)(D_PerfNowUS() - frame_start_us);
+	    D_PerfFrameSample (logic_us, sound_us, display_us, mix_us, frame_us);
+	}
     }
 }
 
@@ -794,6 +965,8 @@ void FindResponseFile (void)
 void D_DoomMain (void)
 {
     int             p;
+	int             perfparm;
+	unsigned long long stage_start_us;
     char                    file[256];
 
     FindResponseFile ();
@@ -802,6 +975,24 @@ void D_DoomMain (void)
 	
     setbuf (stdout, NULL);
     modifiedgame = false;
+
+    doomperf_enabled = M_CheckParm ("-perf") != 0;
+    if (doomperf_enabled)
+    {
+	doomperf_report_frames = 175;
+	perfparm = M_CheckParm ("-perfinterval");
+	if (perfparm && perfparm < myargc-1)
+	{
+	    doomperf_report_frames = atoi (myargv[perfparm+1]);
+	    if (doomperf_report_frames < 1)
+		doomperf_report_frames = 1;
+	}
+	doomperf_startup_reported = 0;
+	doomperf_startup_begin_us = D_PerfNowUS();
+	printf ("PERF enabled (report interval %d frames).\n", doomperf_report_frames);
+    }
+
+    stage_start_us = 0;
 	
     nomonsters = M_CheckParm ("-nomonsters");
     respawnparm = M_CheckParm ("-respawn");
@@ -1007,16 +1198,28 @@ void D_DoomMain (void)
     
     // init subsystems
     printf ("V_Init: allocate screens.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     V_Init ();
+	D_PerfStartupStage ("V_Init", stage_start_us);
 
     printf ("M_LoadDefaults: Load system defaults.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     M_LoadDefaults ();              // load before initing other systems
+	D_PerfStartupStage ("M_LoadDefaults", stage_start_us);
 
     printf ("Z_Init: Init zone memory allocation daemon. \n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     Z_Init ();
+	D_PerfStartupStage ("Z_Init", stage_start_us);
 
     printf ("W_Init: Init WADfiles.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     W_InitMultipleFiles (wadfiles);
+	D_PerfStartupStage ("W_InitMultipleFiles", stage_start_us);
     
 
     // Check for -file in shareware
@@ -1087,28 +1290,52 @@ void D_DoomMain (void)
     }
 
     printf ("M_Init: Init miscellaneous info.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     M_Init ();
+	D_PerfStartupStage ("M_Init", stage_start_us);
 
     printf ("R_Init: Init DOOM refresh daemon - ");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     R_Init ();
+	D_PerfStartupStage ("R_Init", stage_start_us);
 
     printf ("\nP_Init: Init Playloop state.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     P_Init ();
+	D_PerfStartupStage ("P_Init", stage_start_us);
 
     printf ("I_Init: Setting up machine state.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     I_Init ();
+	D_PerfStartupStage ("I_Init", stage_start_us);
 
     printf ("D_CheckNetGame: Checking network game status.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     D_CheckNetGame ();
+	D_PerfStartupStage ("D_CheckNetGame", stage_start_us);
 
     printf ("S_Init: Setting up sound.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     S_Init (snd_SfxVolume /* *8 */, snd_MusicVolume /* *8*/ );
+	D_PerfStartupStage ("S_Init", stage_start_us);
 
     printf ("HU_Init: Setting up heads up display.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     HU_Init ();
+	D_PerfStartupStage ("HU_Init", stage_start_us);
 
     printf ("ST_Init: Init status bar.\n");
+	if (doomperf_enabled)
+	stage_start_us = D_PerfNowUS();
     ST_Init ();
+	D_PerfStartupStage ("ST_Init", stage_start_us);
 
     // check for a driver that wants intermission stats
     p = M_CheckParm ("-statcopy");
@@ -1135,6 +1362,7 @@ void D_DoomMain (void)
     {
 	singledemo = true;              // quit after one demo
 	G_DeferedPlayDemo (myargv[p+1]);
+	D_PerfStartupDone ("playdemo");
 	D_DoomLoop ();  // never returns
     }
 	
@@ -1142,6 +1370,7 @@ void D_DoomMain (void)
     if (p && p < myargc-1)
     {
 	G_TimeDemo (myargv[p+1]);
+	D_PerfStartupDone ("timedemo");
 	D_DoomLoop ();  // never returns
     }
 	
@@ -1165,5 +1394,6 @@ void D_DoomMain (void)
 
     }
 
+	D_PerfStartupDone ("normal");
     D_DoomLoop ();  // never returns
 }

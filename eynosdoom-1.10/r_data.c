@@ -603,7 +603,13 @@ void R_InitFlats (void)
 void R_InitSpriteLumps (void)
 {
     int		i;
-    patch_t	*patch;
+    struct
+    {
+	short width;
+	short height;
+	short leftoffset;
+	short topoffset;
+    } patchhdr;
 	
     firstspritelump = W_GetNumForName ("S_START") + 1;
     lastspritelump = W_GetNumForName ("S_END") - 1;
@@ -618,10 +624,10 @@ void R_InitSpriteLumps (void)
 	if (!(i&63))
 	    printf (".");
 
-	patch = W_CacheLumpNum (firstspritelump+i, PU_CACHE);
-	spritewidth[i] = SHORT(patch->width)<<FRACBITS;
-	spriteoffset[i] = SHORT(patch->leftoffset)<<FRACBITS;
-	spritetopoffset[i] = SHORT(patch->topoffset)<<FRACBITS;
+    W_ReadLumpHeader (firstspritelump+i, &patchhdr, sizeof(patchhdr));
+    spritewidth[i] = SHORT(patchhdr.width)<<FRACBITS;
+    spriteoffset[i] = SHORT(patchhdr.leftoffset)<<FRACBITS;
+    spritetopoffset[i] = SHORT(patchhdr.topoffset)<<FRACBITS;
     }
 }
 

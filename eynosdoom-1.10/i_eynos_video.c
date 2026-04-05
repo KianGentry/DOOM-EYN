@@ -266,11 +266,33 @@ void I_FinishUpdate(void)
         return;
 
     /* Expand 8-bit indexed → RGB565. */
-    const byte*     src = screens[0];
-    uint16_t*       dst = g_blit;
-    const int       n   = SCREENWIDTH * SCREENHEIGHT;
-    for (int i = 0; i < n; i++)
-        dst[i] = g_pal565[src[i]];
+    {
+        const byte* src;
+        uint16_t* dst;
+        const uint16_t* pal;
+        int n;
+        int i;
+
+        src = screens[0];
+        dst = g_blit;
+        pal = g_pal565;
+        n = SCREENWIDTH * SCREENHEIGHT;
+
+        i = n >> 2;
+        while (i--) {
+            dst[0] = pal[src[0]];
+            dst[1] = pal[src[1]];
+            dst[2] = pal[src[2]];
+            dst[3] = pal[src[3]];
+            src += 4;
+            dst += 4;
+        }
+
+        i = n & 3;
+        while (i--) {
+            *dst++ = pal[*src++];
+        }
+    }
 
     /* Send to EYN-OS compositor. */
     gui_blit_rgb565_t cmd;
@@ -308,6 +330,11 @@ void I_EndRead(void)   { }
  */
 void I_StartTic(void)
 {
+    int got_mouse = 0;
+    int mouse_dx = 0;
+    int mouse_dy = 0;
+    int mouse_btn = 0;
+
     if (g_win < 0)
         return;
 
@@ -345,34 +372,32 @@ void I_StartTic(void)
             int my  = ge.b;
             int btn = ge.c;
 
-            event_t ev;
-            ev.type  = ev_mouse;
-            /* DOOM button bits: 0=fire(left), 1=use(right), 2=forward(middle) */
-            ev.data1 = (btn & 1) | ((btn & 2) ? 2 : 0) | ((btn & 4) ? 4 : 0);
-
-            /*
-             * Compute delta from the last known warp target (centre).
-             * Because we warp back to centre after every event, the delta
-             * here equals the actual physical mouse movement since the
-             * previous tic, unbounded by screen edges.
-             */
-            ev.data2 = (mx - g_last_mx) << 2;   /* horiz ×4 sensitivity */
-            ev.data3 = (g_last_my - my)  << 2;   /* vert  ×4, Y inverted */
-
-            /*
-             * Re-centre: warp the cursor back to the content-area centre
-             * and record that position as our new baseline.  The next
-             * hardware delta will be relative to this known origin.
-             */
-            g_last_mx = g_center_x;
-            g_last_my = g_center_y;
-            gui_warp_mouse(g_win, g_center_x, g_center_y);
-
-            D_PostEvent(&ev);
+            /* Coalesce multiple motion events and warp once at the end of the tic. */
+            mouse_dx += (mx - g_last_mx);
+            mouse_dy += (g_last_my - my);
+            mouse_btn = btn;
+            g_last_mx = mx;
+            g_last_my = my;
+            got_mouse = 1;
         }
         else if (ge.type == GUI_EVENT_CLOSE) {
             /* Window close → treat as Escape press. */
             post_doom_key(KEY_ESCAPE, 1);
         }
+    }
+
+    if (got_mouse) {
+        event_t ev;
+        ev.type  = ev_mouse;
+        /* DOOM button bits: 0=fire(left), 1=use(right), 2=forward(middle) */
+        ev.data1 = (mouse_btn & 1) | ((mouse_btn & 2) ? 2 : 0) | ((mouse_btn & 4) ? 4 : 0);
+        ev.data2 = mouse_dx << 2;
+        ev.data3 = mouse_dy << 2;
+
+        g_last_mx = g_center_x;
+        g_last_my = g_center_y;
+        gui_warp_mouse(g_win, g_center_x, g_center_y);
+
+        D_PostEvent(&ev);
     }
 }

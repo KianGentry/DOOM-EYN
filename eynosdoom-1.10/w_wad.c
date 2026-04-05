@@ -34,7 +34,6 @@ rcsid[] = "$Id: w_wad.c,v 1.5 1997/02/03 16:47:57 b1 Exp $";
 #include <malloc.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <alloca.h>
 #define O_BINARY		0
 #endif
 
@@ -63,8 +62,130 @@ int			numlumps;
 
 void**			lumpcache;
 
+static int		lumpinfo_capacity;
+
+#define LUMPHASH_SIZE 1024
+static int		lumphash[LUMPHASH_SIZE];
+static int*		lumphash_next;
+
 
 #define strcmpi	strcasecmp
+
+static unsigned W_LumpNameHash (int v1, int v2)
+{
+    return (((unsigned)v1 * 1315423911u) ^ (unsigned)v2) & (LUMPHASH_SIZE-1);
+}
+
+static int W_ReadFully (int handle, void* dest, int size)
+{
+    int total;
+    int got;
+    byte* out;
+
+    total = 0;
+    out = (byte*)dest;
+
+    while (size > 0)
+    {
+        got = read (handle, out, size);
+        if (got <= 0)
+            break;
+        out += got;
+        total += got;
+        size -= got;
+    }
+
+    return total;
+}
+
+static int W_IsWadFilename (char* filename)
+{
+    int len;
+
+    len = strlen(filename);
+    if (len < 3)
+        return 0;
+
+    return !strcmpi (filename+len-3, "wad");
+}
+
+static void W_EnsureLumpInfoCapacity (int needed)
+{
+    int newcap;
+
+    if (needed <= lumpinfo_capacity)
+        return;
+
+    newcap = lumpinfo_capacity ? lumpinfo_capacity : 1;
+    while (newcap < needed)
+        newcap <<= 1;
+
+    lumpinfo = realloc (lumpinfo, newcap * sizeof(*lumpinfo));
+    if (!lumpinfo)
+        I_Error ("Couldn't realloc lumpinfo");
+
+    lumpinfo_capacity = newcap;
+}
+
+static int W_CountFileLumps (char* filename)
+{
+    wadinfo_t header;
+    int handle;
+
+    if (filename[0] == '~')
+        filename++;
+
+    if ( (handle = open (filename,O_RDONLY | O_BINARY)) == -1)
+        return 0;
+
+    if (!W_IsWadFilename (filename))
+    {
+        close (handle);
+        return 1;
+    }
+
+    if (W_ReadFully (handle, &header, sizeof(header)) != sizeof(header))
+    {
+        close (handle);
+        return 0;
+    }
+
+    close (handle);
+    return LONG(header.numlumps);
+}
+
+static void W_BuildLumpHash (void)
+{
+    int i;
+    int v1;
+    int v2;
+    int hash;
+
+    for (i=0 ; i<LUMPHASH_SIZE ; i++)
+        lumphash[i] = -1;
+
+    if (lumphash_next)
+    {
+        free (lumphash_next);
+        lumphash_next = NULL;
+    }
+
+    lumphash_next = malloc (numlumps * sizeof(*lumphash_next));
+    if (!lumphash_next)
+        I_Error ("Couldn't allocate lumphash links");
+
+    for (i=0 ; i<numlumps ; i++)
+        lumphash_next[i] = -1;
+
+    for (i=0 ; i<numlumps ; i++)
+    {
+        v1 = *(int *)lumpinfo[i].name;
+        v2 = *(int *)&lumpinfo[i].name[4];
+        hash = W_LumpNameHash (v1, v2);
+        lumphash_next[i] = lumphash[hash];
+        lumphash[hash] = i;
+    }
+}
 
 void strupr (char* s)
 {
@@ -147,8 +268,10 @@ void W_AddFile (char *filename)
     int			length;
     int			startlump;
     filelump_t*		fileinfo;
+    filelump_t*		fileinfo_alloc;
     filelump_t		singleinfo;
     int			storehandle;
+    int                     addcount;
     
     // open the file and add to directory
 
@@ -168,20 +291,26 @@ void W_AddFile (char *filename)
 
     printf (" adding %s\n",filename);
     startlump = numlumps;
+    fileinfo_alloc = NULL;
+
 	
-    if (strcmpi (filename+strlen(filename)-3 , "wad" ) )
+    if (!W_IsWadFilename (filename))
     {
 	// single lump file
 	fileinfo = &singleinfo;
 	singleinfo.filepos = 0;
 	singleinfo.size = LONG(filelength(handle));
 	ExtractFileBase (filename, singleinfo.name);
-	numlumps++;
+    addcount = 1;
     }
     else 
     {
 	// WAD file
-	read (handle, &header, sizeof(header));
+    if (W_ReadFully (handle, &header, sizeof(header)) != sizeof(header))
+    {
+        I_Error ("W_AddFile: couldn't read header for %s", filename);
+    }
+
 	if (strncmp(header.identification,"IWAD",4))
 	{
 	    // Homebrew levels?
@@ -196,18 +325,22 @@ void W_AddFile (char *filename)
 	header.numlumps = LONG(header.numlumps);
 	header.infotableofs = LONG(header.infotableofs);
 	length = header.numlumps*sizeof(filelump_t);
-	fileinfo = alloca (length);
-	lseek (handle, header.infotableofs, SEEK_SET);
-	read (handle, fileinfo, length);
-	numlumps += header.numlumps;
+    fileinfo = fileinfo_alloc = malloc (length);
+    if (!fileinfo)
+    {
+        I_Error ("W_AddFile: couldn't allocate directory for %s", filename);
     }
 
-    
-    // Fill in lumpinfo
-    lumpinfo = realloc (lumpinfo, numlumps*sizeof(lumpinfo_t));
+	lseek (handle, header.infotableofs, SEEK_SET);
+    if (W_ReadFully (handle, fileinfo, length) != length)
+    {
+        I_Error ("W_AddFile: couldn't read directory for %s", filename);
+    }
+    addcount = header.numlumps;
+    }
 
-    if (!lumpinfo)
-	I_Error ("Couldn't realloc lumpinfo");
+    numlumps += addcount;
+    W_EnsureLumpInfoCapacity (numlumps);
 
     lump_p = &lumpinfo[startlump];
 	
@@ -220,6 +353,9 @@ void W_AddFile (char *filename)
 	lump_p->size = LONG(fileinfo->size);
 	strncpy (lump_p->name, fileinfo->name, 8);
     }
+
+    if (fileinfo_alloc)
+	free (fileinfo_alloc);
 	
     if (reloadname)
 	close (handle);
@@ -242,6 +378,8 @@ void W_Reload (void)
     int			handle;
     int			length;
     filelump_t*		fileinfo;
+    filelump_t*		fileinfo_base;
+
 	
     if (!reloadname)
 	return;
@@ -249,13 +387,20 @@ void W_Reload (void)
     if ( (handle = open (reloadname,O_RDONLY | O_BINARY)) == -1)
 	I_Error ("W_Reload: couldn't open %s",reloadname);
 
-    read (handle, &header, sizeof(header));
+    if (W_ReadFully (handle, &header, sizeof(header)) != sizeof(header))
+    I_Error ("W_Reload: couldn't read %s", reloadname);
+
     lumpcount = LONG(header.numlumps);
     header.infotableofs = LONG(header.infotableofs);
     length = lumpcount*sizeof(filelump_t);
-    fileinfo = alloca (length);
+    fileinfo = malloc (length);
+    if (!fileinfo)
+	I_Error ("W_Reload: couldn't allocate directory for %s", reloadname);
+    fileinfo_base = fileinfo;
+
     lseek (handle, header.infotableofs, SEEK_SET);
-    read (handle, fileinfo, length);
+    if (W_ReadFully (handle, fileinfo, length) != length)
+	I_Error ("W_Reload: couldn't read directory for %s", reloadname);
     
     // Fill in lumpinfo
     lump_p = &lumpinfo[reloadlump];
@@ -270,6 +415,8 @@ void W_Reload (void)
 	lump_p->position = LONG(fileinfo->filepos);
 	lump_p->size = LONG(fileinfo->size);
     }
+
+    free (fileinfo_base);
 	
     close (handle);
 }
@@ -292,12 +439,23 @@ void W_Reload (void)
 void W_InitMultipleFiles (char** filenames)
 {	
     int		size;
+    int         estimate;
+    char**      fn;
     
     // open all the files, load headers, and count lumps
     numlumps = 0;
 
-    // will be realloced as lumps are added
-    lumpinfo = malloc(1);	
+    estimate = 0;
+    for (fn = filenames ; *fn ; fn++)
+	estimate += W_CountFileLumps (*fn);
+
+    if (estimate < 1)
+	estimate = 1;
+
+    lumpinfo_capacity = estimate;
+    lumpinfo = malloc (lumpinfo_capacity * sizeof(*lumpinfo));
+    if (!lumpinfo)
+	I_Error ("Couldn't allocate lumpinfo");
 
     for ( ; *filenames ; filenames++)
 	W_AddFile (*filenames);
@@ -313,6 +471,8 @@ void W_InitMultipleFiles (char** filenames)
 	I_Error ("Couldn't allocate lumpcache");
 
     memset (lumpcache,0, size);
+
+    W_BuildLumpHash ();
 }
 
 
@@ -358,6 +518,8 @@ int W_CheckNumForName (char* name)
     
     int		v1;
     int		v2;
+    int         hash;
+    int         i;
     lumpinfo_t*	lump_p;
 
     // make the name into two integers for easy compares
@@ -373,13 +535,32 @@ int W_CheckNumForName (char* name)
     v2 = name8.x[1];
 
 
+    if (lumphash_next)
+    {
+    hash = W_LumpNameHash (v1, v2);
+
+    for (i = lumphash[hash] ; i != -1 ; i = lumphash_next[i])
+    {
+        lump_p = &lumpinfo[i];
+        if ( *(int *)lump_p->name == v1
+         && *(int *)&lump_p->name[4] == v2)
+        {
+        return i;
+        }
+    }
+
+    // TFB. Not found.
+    return -1;
+    }
+
+
     // scan backwards so patch lump files take precedence
     lump_p = lumpinfo + numlumps;
 
     while (lump_p-- != lumpinfo)
     {
-	if ( *(int *)lump_p->name == v1
-	     && *(int *)&lump_p->name[4] == v2)
+    if ( *(int *)lump_p->name == v1
+         && *(int *)&lump_p->name[4] == v2)
 	{
 	    return lump_p - lumpinfo;
 	}
@@ -454,19 +635,7 @@ W_ReadLump
 	handle = l->handle;
 		
     lseek (handle, l->position, SEEK_SET);
-    /* EYN-OS read() may return short for large lumps; loop until full. */
-    {
-	int remaining = l->size;
-	byte* dst = (byte*)dest;
-	c = 0;
-	while (remaining > 0) {
-	    int got = read(handle, dst, remaining);
-	    if (got <= 0) break;
-	    c += got;
-	    dst += got;
-	    remaining -= got;
-	}
-    }
+    c = W_ReadFully (handle, dest, l->size);
 
     if (c < l->size)
 	I_Error ("W_ReadLump: only read %i of %i on lump %i",
@@ -476,6 +645,44 @@ W_ReadLump
 	close (handle);
 		
     // ??? I_EndRead ();
+}
+
+
+void
+W_ReadLumpHeader
+( int		lump,
+  void*		dest,
+  int		size )
+{
+    int		c;
+    lumpinfo_t*	l;
+    int		handle;
+
+    if (lump >= numlumps)
+	I_Error ("W_ReadLumpHeader: %i >= numlumps",lump);
+
+    l = lumpinfo+lump;
+
+    if (size > l->size)
+	size = l->size;
+
+    if (l->handle == -1)
+    {
+	if ( (handle = open (reloadname,O_RDONLY | O_BINARY)) == -1)
+	    I_Error ("W_ReadLumpHeader: couldn't open %s",reloadname);
+    }
+    else
+	handle = l->handle;
+
+    lseek (handle, l->position, SEEK_SET);
+    c = W_ReadFully (handle, dest, size);
+
+    if (c < size)
+	I_Error ("W_ReadLumpHeader: only read %i of %i on lump %i",
+		 c,size,lump);
+
+    if (l->handle == -1)
+	close (handle);
 }
 
 
@@ -489,8 +696,6 @@ W_CacheLumpNum
 ( int		lump,
   int		tag )
 {
-    byte*	ptr;
-
     if ((unsigned)lump >= numlumps)
 	I_Error ("W_CacheLumpNum: %i >= numlumps",lump);
 		
@@ -499,7 +704,7 @@ W_CacheLumpNum
 	// read the lump in
 	
 	//printf ("cache miss on lump %i\n",lump);
-	ptr = Z_Malloc (W_LumpLength (lump), tag, &lumpcache[lump]);
+	Z_Malloc (W_LumpLength (lump), tag, &lumpcache[lump]);
 	W_ReadLump (lump, lumpcache[lump]);
     }
     else
