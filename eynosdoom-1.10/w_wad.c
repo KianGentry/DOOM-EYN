@@ -74,6 +74,8 @@ static unsigned long    wadperf_read_bytes;
 static unsigned long    wadperf_cache_hits;
 static unsigned long    wadperf_cache_misses;
 static unsigned long*   wadperf_lump_misses;
+static int              wadread_last_handle = -2;
+static int              wadread_last_pos;
 
 
 #define strcmpi	strcasecmp
@@ -747,8 +749,12 @@ W_ReadLump
     else
 	handle = l->handle;
 		
-    lseek (handle, l->position, SEEK_SET);
+    if (wadread_last_handle != handle || wadread_last_pos != l->position)
+	lseek (handle, l->position, SEEK_SET);
     c = W_ReadFully (handle, dest, l->size);
+
+    wadread_last_handle = handle;
+    wadread_last_pos = l->position + c;
 
     if (wadperf_enabled)
     {
@@ -761,7 +767,10 @@ W_ReadLump
 		 c,l->size,lump);	
 
     if (l->handle == -1)
+    {
 	close (handle);
+    wadread_last_handle = -2;
+    }
 		
     // ??? I_EndRead ();
 }
@@ -793,8 +802,12 @@ W_ReadLumpHeader
     else
 	handle = l->handle;
 
-    lseek (handle, l->position, SEEK_SET);
+    if (wadread_last_handle != handle || wadread_last_pos != l->position)
+	lseek (handle, l->position, SEEK_SET);
     c = W_ReadFully (handle, dest, size);
+
+    wadread_last_handle = handle;
+    wadread_last_pos = l->position + c;
 
     if (wadperf_enabled)
     {
@@ -807,7 +820,10 @@ W_ReadLumpHeader
 		 c,size,lump);
 
     if (l->handle == -1)
+    {
 	close (handle);
+    wadread_last_handle = -2;
+    }
 }
 
 

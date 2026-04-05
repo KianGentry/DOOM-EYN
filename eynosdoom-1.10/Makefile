@@ -6,8 +6,28 @@
 #
 CC=  gcc  # gcc or g++
 
-CFLAGS=-g -Wall -DNORMALUNIX -DLINUX # -DUSEASM 
+DEBUG ?= 0
+TUNE386 ?= 0
+M32 ?= 0
+
+BASE_CFLAGS=-Wall -DNORMALUNIX -DLINUX # -DUSEASM
+
+ifeq ($(DEBUG),1)
+CFLAGS=$(BASE_CFLAGS) -g -O0
+else
+CFLAGS=$(BASE_CFLAGS) -O2 -fno-strict-aliasing -fomit-frame-pointer
+endif
+
+ifeq ($(TUNE386),1)
+CFLAGS += -mtune=i386
+endif
+
 LDFLAGS=-L/usr/X11R6/lib
+
+ifeq ($(M32),1)
+CFLAGS += -m32
+LDFLAGS += -m32
+endif
 LIBS=-lXext -lX11 -lnsl -lm
 
 # subdirectory for objects

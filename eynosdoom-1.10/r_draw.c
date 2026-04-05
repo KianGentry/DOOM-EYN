@@ -104,15 +104,19 @@ int			dccount;
 // 
 void R_DrawColumn (void) 
 { 
-    int			count; 
-    byte*		dest; 
+    int			count;
+    byte*		dest;
+    byte*		source;
+    lighttable_t*	colormap;
     fixed_t		frac;
-    fixed_t		fracstep;	 
+    fixed_t		fracstep;
+    int			step;
+    int			step4;
  
-    count = dc_yh - dc_yl; 
+    count = dc_yh - dc_yl + 1;
 
     // Zero length, column does not exceed a pixel.
-    if (count < 0) 
+	if (count <= 0)
 	return; 
 				 
 #ifdef RANGECHECK 
@@ -129,22 +133,38 @@ void R_DrawColumn (void)
 
     // Determine scaling,
     //  which is the only mapping to be done.
-    fracstep = dc_iscale; 
-    frac = dc_texturemid + (dc_yl-centery)*fracstep; 
+    fracstep = dc_iscale;
+    frac = dc_texturemid + (dc_yl-centery)*fracstep;
+    source = dc_source;
+    colormap = dc_colormap;
+    step = SCREENWIDTH;
+    step4 = SCREENWIDTH*4;
 
-    // Inner loop that does the actual texture mapping,
-    //  e.g. a DDA-lile scaling.
-    // This is as fast as it gets.
-    do 
+    while (count >= 4)
+    {
+    dest[0] = colormap[source[(frac>>FRACBITS)&127]];
+    frac += fracstep;
+    dest[step] = colormap[source[(frac>>FRACBITS)&127]];
+    frac += fracstep;
+    dest[step+step] = colormap[source[(frac>>FRACBITS)&127]];
+    frac += fracstep;
+    dest[step+step+step] = colormap[source[(frac>>FRACBITS)&127]];
+    frac += fracstep;
+
+    dest += step4;
+    count -= 4;
+    }
+
+    while (count--) 
     {
 	// Re-map color indices from wall texture column
 	//  using a lighting/special effects LUT.
-	*dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+	*dest = colormap[source[(frac>>FRACBITS)&127]];
 	
 	dest += SCREENWIDTH; 
 	frac += fracstep;
 	
-    } while (count--); 
+    }
 } 
 
 
@@ -521,7 +541,11 @@ void R_DrawSpan (void)
 { 
     fixed_t		xfrac;
     fixed_t		yfrac; 
+    fixed_t		xstep;
+    fixed_t		ystep;
     byte*		dest; 
+    byte*		source;
+    lighttable_t*	colormap;
     int			count;
     int			spot; 
 	 
@@ -540,26 +564,55 @@ void R_DrawSpan (void)
     
     xfrac = ds_xfrac; 
     yfrac = ds_yfrac; 
+        xstep = ds_xstep;
+        ystep = ds_ystep;
+        source = ds_source;
+        colormap = ds_colormap;
 	 
     dest = ylookup[ds_y] + columnofs[ds_x1];
 
     // We do not check for zero spans here?
-    count = ds_x2 - ds_x1; 
+        count = ds_x2 - ds_x1 + 1;
 
-    do 
+        while (count >= 4)
+        {
+        spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
+        *dest++ = colormap[source[spot]];
+        xfrac += xstep;
+        yfrac += ystep;
+
+        spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
+        *dest++ = colormap[source[spot]];
+        xfrac += xstep;
+        yfrac += ystep;
+
+        spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
+        *dest++ = colormap[source[spot]];
+        xfrac += xstep;
+        yfrac += ystep;
+
+        spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
+        *dest++ = colormap[source[spot]];
+        xfrac += xstep;
+        yfrac += ystep;
+
+        count -= 4;
+        }
+
+        while (count--) 
     {
 	// Current texture index in u,v.
 	spot = ((yfrac>>(16-6))&(63*64)) + ((xfrac>>16)&63);
 
 	// Lookup pixel from flat texture tile,
 	//  re-index using light/colormap.
-	*dest++ = ds_colormap[ds_source[spot]];
+        *dest++ = colormap[source[spot]];
 
 	// Next step in u,v.
-	xfrac += ds_xstep; 
-	yfrac += ds_ystep;
+        xfrac += xstep;
+        yfrac += ystep;
 	
-    } while (count--); 
+        }
 } 
 
 
