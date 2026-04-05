@@ -68,6 +68,8 @@ extern	int		numlumps;
 
 void    W_InitMultipleFiles (char** filenames);
 void    W_Reload (void);
+void    W_SetPerfMode (int enabled);
+void    W_ReportPerfStats (void);
 
 int	W_CheckNumForName (char* name);
 int	W_GetNumForName (char* name);

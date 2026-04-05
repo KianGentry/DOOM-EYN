@@ -68,6 +68,13 @@ static int		lumpinfo_capacity;
 static int		lumphash[LUMPHASH_SIZE];
 static int*		lumphash_next;
 
+static int              wadperf_enabled;
+static unsigned long    wadperf_reads;
+static unsigned long    wadperf_read_bytes;
+static unsigned long    wadperf_cache_hits;
+static unsigned long    wadperf_cache_misses;
+static unsigned long*   wadperf_lump_misses;
+
 
 #define strcmpi	strcasecmp
 
@@ -96,6 +103,100 @@ static int W_ReadFully (int handle, void* dest, int size)
     }
 
     return total;
+}
+
+void W_SetPerfMode (int enabled)
+{
+    wadperf_enabled = enabled ? 1 : 0;
+}
+
+static void W_ResetPerfStats (void)
+{
+    wadperf_reads = 0;
+    wadperf_read_bytes = 0;
+    wadperf_cache_hits = 0;
+    wadperf_cache_misses = 0;
+
+    if (wadperf_lump_misses && numlumps > 0)
+        memset (wadperf_lump_misses, 0, numlumps * sizeof(*wadperf_lump_misses));
+}
+
+void W_ReportPerfStats (void)
+{
+    unsigned long total_cache;
+    int i;
+    int slot;
+    int top_idx[5];
+    unsigned long top_val[5];
+
+    if (!wadperf_enabled)
+        return;
+
+    total_cache = wadperf_cache_hits + wadperf_cache_misses;
+
+    printf ("PERF WAD reads=%lu bytes=%lu cache hits=%lu misses=%lu",
+            wadperf_reads,
+            wadperf_read_bytes,
+            wadperf_cache_hits,
+            wadperf_cache_misses);
+
+    if (total_cache)
+    {
+        unsigned long hit_permille;
+        hit_permille = (wadperf_cache_hits * 1000UL) / total_cache;
+        printf (" hitrate=%lu.%01lu%%", hit_permille/10, hit_permille%10);
+    }
+    printf ("\n");
+
+    if (!wadperf_lump_misses)
+        return;
+
+    for (slot=0 ; slot<5 ; slot++)
+    {
+        top_idx[slot] = -1;
+        top_val[slot] = 0;
+    }
+
+    for (i=0 ; i<numlumps ; i++)
+    {
+        unsigned long v;
+        int j;
+
+        v = wadperf_lump_misses[i];
+        if (!v)
+            continue;
+
+        for (j=0 ; j<5 ; j++)
+        {
+            if (v > top_val[j])
+            {
+                int k;
+                for (k=4 ; k>j ; k--)
+                {
+                    top_val[k] = top_val[k-1];
+                    top_idx[k] = top_idx[k-1];
+                }
+                top_val[j] = v;
+                top_idx[j] = i;
+                break;
+            }
+        }
+    }
+
+    for (slot=0 ; slot<5 ; slot++)
+    {
+        char name[9];
+        if (top_idx[slot] < 0)
+            continue;
+        memcpy (name, lumpinfo[top_idx[slot]].name, 8);
+        name[8] = 0;
+        printf ("PERF WAD hotmiss #%d lump=%d name=%s misses=%lu size=%d\n",
+                slot+1,
+                top_idx[slot],
+                name,
+                top_val[slot],
+                lumpinfo[top_idx[slot]].size);
+    }
 }
 
 static int W_IsWadFilename (char* filename)
@@ -472,6 +573,18 @@ void W_InitMultipleFiles (char** filenames)
 
     memset (lumpcache,0, size);
 
+    if (wadperf_lump_misses)
+    {
+        free (wadperf_lump_misses);
+        wadperf_lump_misses = NULL;
+    }
+
+    wadperf_lump_misses = malloc (numlumps * sizeof(*wadperf_lump_misses));
+    if (wadperf_lump_misses)
+        memset (wadperf_lump_misses, 0, numlumps * sizeof(*wadperf_lump_misses));
+
+    W_ResetPerfStats ();
+
     W_BuildLumpHash ();
 }
 
@@ -637,6 +750,12 @@ W_ReadLump
     lseek (handle, l->position, SEEK_SET);
     c = W_ReadFully (handle, dest, l->size);
 
+    if (wadperf_enabled)
+    {
+        wadperf_reads++;
+        wadperf_read_bytes += c;
+    }
+
     if (c < l->size)
 	I_Error ("W_ReadLump: only read %i of %i on lump %i",
 		 c,l->size,lump);	
@@ -677,6 +796,12 @@ W_ReadLumpHeader
     lseek (handle, l->position, SEEK_SET);
     c = W_ReadFully (handle, dest, size);
 
+    if (wadperf_enabled)
+    {
+        wadperf_reads++;
+        wadperf_read_bytes += c;
+    }
+
     if (c < size)
 	I_Error ("W_ReadLumpHeader: only read %i of %i on lump %i",
 		 c,size,lump);
@@ -704,12 +829,22 @@ W_CacheLumpNum
 	// read the lump in
 	
 	//printf ("cache miss on lump %i\n",lump);
+    if (wadperf_enabled)
+    {
+        wadperf_cache_misses++;
+        if (wadperf_lump_misses)
+        wadperf_lump_misses[lump]++;
+    }
 	Z_Malloc (W_LumpLength (lump), tag, &lumpcache[lump]);
 	W_ReadLump (lump, lumpcache[lump]);
     }
     else
     {
 	//printf ("cache hit on lump %i\n",lump);
+    if (wadperf_enabled)
+    {
+        wadperf_cache_hits++;
+    }
 	Z_ChangeTag (lumpcache[lump],tag);
     }
 	

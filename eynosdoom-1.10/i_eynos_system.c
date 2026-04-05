@@ -28,6 +28,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "doomdef.h"
@@ -36,6 +37,7 @@
 #include "i_sound.h"
 #include "g_game.h"
 #include "i_system.h"
+#include "w_wad.h"
 
 /*
  * ABI-INVARIANT: Zone allocator size in megabytes.
@@ -103,16 +105,34 @@ byte* I_ZoneBase(int* size)
  */
 int I_GetTime(void)
 {
-    struct timeval  tp;
-    struct timezone tzp;
-    static int      basetime = 0;
+    static unsigned long long basetime_us = 0;
+    unsigned long long now_us;
 
-    gettimeofday(&tp, &tzp);
-    if (!basetime)
-        basetime = (int)tp.tv_sec;
+#if defined(CLOCK_MONOTONIC)
+    {
+        struct timespec ts;
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        {
+            now_us = (unsigned long long)ts.tv_sec * 1000000ULL
+                   + (unsigned long long)(ts.tv_nsec / 1000ULL);
+            if (!basetime_us)
+                basetime_us = now_us;
+            return (int)(((now_us - basetime_us) * TICRATE) / 1000000ULL);
+        }
+    }
+#endif
 
-    return (int)((tp.tv_sec - basetime) * TICRATE +
-                 tp.tv_usec * TICRATE / 1000000);
+    {
+        struct timeval tp;
+        gettimeofday(&tp, NULL);
+        now_us = (unsigned long long)tp.tv_sec * 1000000ULL
+               + (unsigned long long)tp.tv_usec;
+    }
+
+    if (!basetime_us)
+        basetime_us = now_us;
+
+    return (int)(((now_us - basetime_us) * TICRATE) / 1000000ULL);
 }
 
 /* I_Init — called once at start-up; initialise platform subsystems. */
@@ -129,6 +149,7 @@ void I_Init(void)
  * default.cfg on the EYNFS image. */
 void I_Quit(void)
 {
+    W_ReportPerfStats();
     I_ShutdownSound();
     I_ShutdownMusic();
     M_SaveDefaults();
@@ -165,6 +186,8 @@ void I_Error(char* error, ...)
     /* Attempt to preserve a demo recording if one was in progress. */
     if (demorecording)
         G_CheckDemoStatus();
+
+    W_ReportPerfStats();
 
     I_ShutdownGraphics();
     _exit(-1);

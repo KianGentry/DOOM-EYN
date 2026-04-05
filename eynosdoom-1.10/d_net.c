@@ -461,7 +461,7 @@ void CheckAbort (void)
 	
     I_StartTic ();
     for ( ; eventtail != eventhead 
-	      ; eventtail = (++eventtail)&(MAXEVENTS-1) ) 
+	      ; eventtail = (eventtail + 1)&(MAXEVENTS-1) ) 
     { 
 	ev = &events[eventtail]; 
 	if (ev->type == ev_keydown && ev->data1 == KEY_ESCAPE)
@@ -723,6 +723,12 @@ void TryRunTics (void)
 	
 	if (lowtic < gametic/ticdup)
 	    I_Error ("TryRunTics: lowtic < gametic");
+
+	if (!netgame)
+	{
+	    /* Avoid spinning aggressively while waiting for the next local tic. */
+	    I_WaitVBL (1);
+	}
 				
 	// don't stay in here forever -- give the menu a chance to work
 	if (I_GetTime ()/ticdup - entertic >= 20)
